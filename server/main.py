@@ -42,6 +42,7 @@ _LLM_MODEL: Optional[str] = os.environ.get("LLM_MODEL")
 
 _DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"
 _DEFAULT_OPENAI_MODEL = "gpt-4"
+_DEFAULT_OLLAMA_MODEL = "deepseek-r1:7b"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -320,6 +321,39 @@ async def _call_openai(prompt: str) -> str:
 
     raise ValueError(f"Unexpected OpenAI response shape: {list(data.keys())}")
 
+async def _call_ollama(prompt: str) -> str:
+    ollama_host = os.environ.get("OLLAMA_HOST")
+    if not ollama_host:
+        raise ValueError("OLLAMA_HOST environment variable is not set.")
+    ollama_host = ollama_host.rstrip("/")
+    model = os.environ.get("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL)
+
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        response = await client.post(
+            f"{ollama_host}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    elapsed = round(time.monotonic() - t0, 2)
+    logger.info("Ollama LLM call complete: model=%s elapsed=%.2fs", model, elapsed)
+
+    raw_text = data.get("response", "")
+    if not raw_text:
+        raise ValueError(f"Unexpected Ollama response shape: {list(data.keys())}")
+
+    # DeepSeek-R1 emits its chain-of-thought inside <think>...</think> before
+    # the actual answer. Strip it so extract_json_from_llm_response() doesn't
+    # have to fish the JSON out from underneath a paragraph of reasoning.
+    return re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+
 
 async def call_llm(prompt: str) -> str:
     """Dispatch to the configured LLM provider and return the raw text response."""
@@ -331,6 +365,8 @@ async def call_llm(prompt: str) -> str:
         return await _call_anthropic(prompt)
     elif provider == "openai":
         return await _call_openai(prompt)
+    elif provider == "ollama":
+        return await _call_ollama(prompt)
     else:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider!r}")
 

@@ -56,6 +56,8 @@ wheels/
 
 .DS_Store
 Thumbs.db
+colab_ollama_deepseek_setup.py
+ose-test-project
 
 # ---------------------------------------------------------------------------
 # Project Specific
