@@ -43,6 +43,7 @@ _LLM_MODEL: Optional[str] = os.environ.get("LLM_MODEL")
 _DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"
 _DEFAULT_OPENAI_MODEL = "gpt-4"
 _DEFAULT_OLLAMA_MODEL = "deepseek-r1:7b"
+_DEFAULT_OPENROUTER_MODEL = "mistralai/mistral-7b-instruct:free"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -359,7 +360,7 @@ async def _call_openrouter(prompt: str) -> str:
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY environment variable is not set.")
 
-    model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-r1:free")
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_OPENROUTER_MODEL)
     t0 = time.monotonic()
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -390,6 +391,40 @@ async def _call_openrouter(prompt: str) -> str:
 
     raise ValueError(f"Unexpected OpenRouter response shape: {list(data.keys())}")
 
+async def _call_groq(prompt: str) -> str:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set.")
+
+    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    t0 = time.monotonic()
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 4096,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    elapsed = round(time.monotonic() - t0, 2)
+    logger.info("Groq LLM call complete: model=%s elapsed=%.2fs", model, elapsed)
+
+    choices = data.get("choices", [])
+    if choices:
+        return choices[0]["message"]["content"]
+
+    raise ValueError(f"Unexpected Groq response shape: {list(data.keys())}")
+
 async def call_llm(prompt: str) -> str:
     """Dispatch to the configured LLM provider and return the raw text response."""
     provider = _LLM_PROVIDER
@@ -404,9 +439,10 @@ async def call_llm(prompt: str) -> str:
         return await _call_ollama(prompt)
     elif provider == "anthropic":
         return await _call_anthropic(prompt)
+    elif provider == "groq":
+        return await _call_groq(prompt)
     else:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider!r}")
-
 
 def extract_json_from_llm_response(text: str) -> Dict[str, Any]:
     """
