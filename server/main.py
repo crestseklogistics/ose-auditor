@@ -354,6 +354,41 @@ async def _call_ollama(prompt: str) -> str:
     # have to fish the JSON out from underneath a paragraph of reasoning.
     return re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
 
+async def _call_openrouter(prompt: str) -> str:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set.")
+
+    model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-r1:free")
+    t0 = time.monotonic()
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://ose.crestsek.com",
+                "X-Title": "OSE Auditor",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 4096,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    elapsed = round(time.monotonic() - t0, 2)
+    logger.info("OpenRouter LLM call complete: model=%s elapsed=%.2fs", model, elapsed)
+
+    choices = data.get("choices", [])
+    if choices:
+        return choices[0]["message"]["content"]
+
+    raise ValueError(f"Unexpected OpenRouter response shape: {list(data.keys())}")
 
 async def call_llm(prompt: str) -> str:
     """Dispatch to the configured LLM provider and return the raw text response."""
@@ -361,12 +396,14 @@ async def call_llm(prompt: str) -> str:
     logger.info(
         "Calling LLM provider=%s prompt_chars=%d", provider, len(prompt)
     )
-    if provider == "anthropic":
-        return await _call_anthropic(prompt)
+    if provider == "openrouter":
+        return await _call_openrouter(prompt)
     elif provider == "openai":
         return await _call_openai(prompt)
     elif provider == "ollama":
         return await _call_ollama(prompt)
+    elif provider == "anthropic":
+        return await _call_anthropic(prompt)
     else:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider!r}")
 
