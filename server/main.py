@@ -119,7 +119,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Remove it for production
+    # allow_origins=["*"],  # Remove it for production
     allow_origins=["https://api.crestsek.com", "https://ose.crestsek.com"],
     allow_credentials=True,
     allow_methods=["*"],
