@@ -66,8 +66,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://ose.crestsek.com"
-Repository = "https://github.com/crestsek/ose-auditor"
-Issues = "https://github.com/crestsek/ose-auditor/issues"
+Repository = "https://github.com/crestseklogistics/ose-auditor"
+Issues = "https://github.com/crestseklogistics/ose-auditor/issues"
 
 # Console entry points -- this is what makes `pip install ose-auditor`
 # followed by `ose audit ./project` work without invoking python -m.
@@ -75,32 +75,8 @@ Issues = "https://github.com/crestsek/ose-auditor/issues"
 ose = "client.ose:main"
 ose-mcp = "client.mcp_server:main"
 
-# ---------------------------------------------------------------------------
-# Package layout
-# ---------------------------------------------------------------------------
-# IMPORTANT: this package intentionally ships `client/`, `contracts/`, and
-# `fsa/` ONLY.
-#
-#   - `client/` + `contracts/` are explicitly open-source (MIT) per their
-#     own module docstrings and contain no proprietary logic.
-#   - `fsa/` (analyzer.py, signatures.py, graph_builder.py) IS marked
-#     "CLOSED SOURCE / PROPRIETARY -- never disclosed to the public" in
-#     its own docstrings, but the current architecture requires it to run
-#     locally for `ose audit` to produce real (non-mock) findings. Shipping
-#     it as plaintext .py here is a direct contradiction of that docstring
-#     that you (the maintainer) need to resolve deliberately -- e.g. by
-#     relying on a proprietary LICENSE/EULA rather than secrecy, or by
-#     Cython-compiling these three modules into binary extensions before
-#     building wheels. This pyproject.toml does NOT make that decision for
-#     you; it ships the .py files as-is so the package functions, but you
-#     should not announce this publicly until you've picked an approach.
-#   - `server/` (main.py, database.py, billing.py, prompts.py) is
-#     deliberately EXCLUDED. It is the Render-deployed FastAPI backend and
-#     has no role in the local CLI; shipping it here would leak billing
-#     and prompt internals to every end user for zero functional benefit.
-
 [tool.setuptools.packages.find]
-include = ["client*", "contracts*", "fsa*"]
+include = ["client*", "contracts*"]
 exclude = ["server*", "tests*", "scripts*"]
 
 [tool.setuptools.package-data]
