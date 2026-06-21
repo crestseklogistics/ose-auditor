@@ -56,6 +56,7 @@ wheels/
 
 .DS_Store
 Thumbs.db
+ose_auditor.egg-info/
 colab_ollama_deepseek_setup.py
 ose-test-project
 
