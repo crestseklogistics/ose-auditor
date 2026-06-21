@@ -41,7 +41,7 @@ logger = logging.getLogger("ose.orchestrator")
 # Constants
 # ---------------------------------------------------------------------------
 
-OSE_SERVER_URL = os.environ.get("OSE_SERVER_URL", "https://api.crestsek.com/v1/audit")
+OSE_SERVER_URL = os.environ.get("OSE_SERVER_URL", "https://ose.crestsek.com/v1/audit")
 # OSE_SERVER_URL = "http://localhost:8000/v1/audit"
 CLIENT_VERSION = "1.0.0"
 
