@@ -23,6 +23,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import sys
 from pathlib import Path
@@ -125,6 +126,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_parser.set_defaults(command="audit")
 
+    subparsers.add_parser(
+        "login",
+        help="Log in to OSE Auditor and save your API key.",
+    ).set_defaults(command="login")
+
+    subparsers.add_parser(
+        "signup",
+        help="Create a new OSE Auditor account.",
+    ).set_defaults(command="signup")
+
+    subparsers.add_parser(
+        "logout",
+        help="Log out and remove your locally saved API key.",
+    ).set_defaults(command="logout")
+
+    subparsers.add_parser(
+        "whoami",
+        help="Show which account is currently logged in.",
+    ).set_defaults(command="whoami")
+
     return parser
 
 
@@ -174,6 +195,20 @@ def validate_output_path(output_path: Optional[str]) -> Optional[Path]:
         raise ValueError(f"Output parent path is not a directory: {parent}")
 
     return path
+
+
+def _prompt_credentials() -> tuple[str, str]:
+    """Prompt for an email and password on the terminal.
+
+    Uses :func:`getpass.getpass` for the password so it is never echoed
+    or left in shell history.
+
+    :return: A ``(email, password)`` tuple.
+    :rtype: tuple[str, str]
+    """
+    email = input("Email: ").strip()
+    password = getpass.getpass("Password: ")
+    return email, password
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -238,6 +273,51 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "Audit failed with orchestrator exit code: %s", result_code
         )
         return EXIT_AUDIT_FAILURE
+
+    if args.command in ("login", "signup"):
+        configure_logging(debug=False)
+        email, password = _prompt_credentials()
+
+        try:
+            if args.command == "signup":
+                result = orchestrator.signup(email, password)
+                print(f"Account created. Logged in as {email} "
+                      f"(user_id={result.get('user_id')}).")
+            else:
+                result = orchestrator.login(email, password)
+                print(
+                    f"Logged in as {email} (user_id={result.get('user_id')}).")
+        except orchestrator.ServerCommunicationError as exc:
+            logger.error("%s", exc)
+            return EXIT_GENERAL_ERROR
+        except Exception:  # noqa: BLE001 - top-level safety net for CLI
+            logger.exception("Unexpected error during %s.", args.command)
+            return EXIT_GENERAL_ERROR
+
+        return EXIT_SUCCESS
+
+    if args.command == "logout":
+        configure_logging(debug=False)
+        if orchestrator.logout():
+            print("Logged out.")
+        else:
+            print("Not logged in.")
+        return EXIT_SUCCESS
+
+    if args.command == "whoami":
+        configure_logging(debug=False)
+        try:
+            identity = orchestrator.whoami()
+        except Exception:  # noqa: BLE001 - top-level safety net for CLI
+            logger.exception("Unexpected error while checking identity.")
+            return EXIT_GENERAL_ERROR
+
+        if identity:
+            print(f"Logged in as {identity.get('email', 'unknown')} "
+                  f"(user_id={identity.get('user_id', 'unknown')})")
+        else:
+            print("Not logged in. Run `ose login` (or `ose signup`) first.")
+        return EXIT_SUCCESS
 
     # Unreachable in practice since argparse restricts valid subcommands,
     # but kept as a defensive fallback.

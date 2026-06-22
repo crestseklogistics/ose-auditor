@@ -41,9 +41,28 @@ logger = logging.getLogger("ose.orchestrator")
 # Constants
 # ---------------------------------------------------------------------------
 
-OSE_SERVER_URL = os.environ.get("OSE_SERVER_URL", "https://ose.crestsek.com/v1/audit")
+OSE_SERVER_URL = os.environ.get(
+    "OSE_SERVER_URL", "https://ose.crestsek.com/v1/audit")
 # OSE_SERVER_URL = "http://localhost:8000/v1/audit"
 CLIENT_VERSION = "1.0.0"
+
+
+def _derive_server_base(audit_url: str) -> str:
+    """Derive the server's base URL (scheme + host, no path) from the
+    configured /v1/audit endpoint, so the auth endpoints always target
+    the same server without a second env var to keep in sync.
+    """
+    marker = "/v1/"
+    idx = audit_url.find(marker)
+    if idx == -1:
+        return audit_url.rstrip("/")
+    return audit_url[:idx]
+
+
+_SERVER_BASE_URL = _derive_server_base(OSE_SERVER_URL)
+AUTH_SIGNUP_URL = f"{_SERVER_BASE_URL}/v1/auth/signup"
+AUTH_LOGIN_URL = f"{_SERVER_BASE_URL}/v1/auth/login"
+AUTH_WHOAMI_URL = f"{_SERVER_BASE_URL}/v1/auth/whoami"
 
 CONFIG_DIR = Path.home() / ".ose"
 CACHE_DIR = CONFIG_DIR / "cache"
@@ -168,9 +187,9 @@ def run_audit(project_path: str, output_file: Optional[str], debug: bool) -> int
     api_key = _load_api_key()
     if not api_key:
         logger.error(
-            "No OSE API key found. Set the OSE_API_KEY environment variable "
-            "or create %s with {\"api_key\": \"...\"}.",
-            CONFIG_FILE,
+            "Not logged in and no OSE_API_KEY set. Run `ose login` "
+            "(or `ose signup` if you're new), or set the OSE_API_KEY "
+            "environment variable for CI/CD use."
         )
         return EXIT_GENERAL_ERROR
 
@@ -310,30 +329,194 @@ def _validate_contract_b(data: Dict[str, Any]) -> Dict[str, Any]:
     return contract_b.validate_contract_b(data)
 
 
-def _load_api_key() -> Optional[str]:
-    """Load the OSE API key from the environment or the user config file.
-
-    Resolution order:
-        1. The `OSE_API_KEY` environment variable.
-        2. The `api_key` field in `~/.ose/config.json`.
+def _read_config() -> Optional[Dict[str, Any]]:
+    """Read and parse `~/.ose/config.json`, if present.
 
     Returns:
-        The API key string, or None if it could not be found.
+        The parsed config dict, or None if the file doesn't exist or
+        can't be parsed.
     """
-    api_key = os.environ.get("OSE_API_KEY")
-    if api_key:
-        return api_key
+    if not CONFIG_FILE.exists():
+        return None
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not read config file %s: %s", CONFIG_FILE, exc)
+        return None
 
+
+def _save_credentials(api_key: str, user_id: str, email: str) -> None:
+    """Persist login credentials to `~/.ose/config.json`.
+
+    Args:
+        api_key: The account's API key, as returned by the server.
+        user_id: The account's user_id.
+        email: The account's email (stored for `ose whoami`'s display
+            only; never sent anywhere from this file).
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config = {"api_key": api_key, "user_id": user_id, "email": email}
+    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except OSError:
+        # Best-effort -- not every filesystem supports POSIX permission
+        # bits (e.g. some Windows filesystems); the file is still written.
+        pass
+
+
+def _load_api_key() -> Optional[str]:
+    """Load the OSE API key.
+
+    Resolution order:
+        1. `api_key` in `~/.ose/config.json`, written by `ose login` /
+           `ose signup`. Checked first so a locally logged-in identity
+           always takes precedence over a stale or shared env var.
+        2. The `OSE_API_KEY` environment variable (the admin/CI key, or
+           for backward compatibility with pre-auth setups that never
+           ran `ose login`).
+
+    Returns:
+        The API key string, or None if neither source has one.
+    """
+    config = _read_config()
+    if config and config.get("api_key"):
+        return config["api_key"]
+
+    return os.environ.get("OSE_API_KEY")
+
+
+def _auth_request(url: str, body: Dict[str, str]) -> Dict[str, Any]:
+    """POST an unauthenticated auth request (signup/login) and return the
+    parsed JSON response body on success.
+
+    Args:
+        url: The full auth endpoint URL.
+        body: The JSON request body (e.g. {"email": ..., "password": ...}).
+
+    Returns:
+        The parsed response body.
+
+    Raises:
+        ServerCommunicationError: On network failure or any non-2xx
+            response (the server's error message is included when
+            available).
+    """
+    result = _post_once(
+        url, body, {"Content-Type": "application/json"}, DEFAULT_TIMEOUT_SECONDS
+    )
+    if result.error is not None:
+        raise ServerCommunicationError(
+            f"Could not reach OSE Server: {result.error}")
+    if result.status_code is None or not (200 <= result.status_code < 300):
+        message = None
+        if result.body:
+            message = result.body.get("detail") or result.body.get("message")
+        raise ServerCommunicationError(
+            message or f"Request failed (HTTP {result.status_code})."
+        )
+    if not result.body:
+        raise ServerCommunicationError("Server returned an empty response.")
+    return result.body
+
+
+def signup(email: str, password: str) -> Dict[str, Any]:
+    """Create a new account on the OSE Server and save the returned API key.
+
+    Args:
+        email: The account email.
+        password: The account password. Sent once, over HTTPS, and
+            never itself written to disk -- only the server's resulting
+            API key is saved locally.
+
+    Returns:
+        The server's response body (status, api_key, user_id, email).
+
+    Raises:
+        ServerCommunicationError: On network failure or a rejected
+            signup (e.g. email already registered, weak password).
+    """
+    body = _auth_request(
+        AUTH_SIGNUP_URL, {"email": email, "password": password})
+    _save_credentials(body["api_key"], body["user_id"], email)
+    return body
+
+
+def login(email: str, password: str) -> Dict[str, Any]:
+    """Authenticate against the OSE Server and save the returned API key.
+
+    Args:
+        email: The account email.
+        password: The account password.
+
+    Returns:
+        The server's response body (status, api_key, user_id, email).
+
+    Raises:
+        ServerCommunicationError: On network failure or invalid credentials.
+    """
+    body = _auth_request(
+        AUTH_LOGIN_URL, {"email": email, "password": password})
+    _save_credentials(body["api_key"], body["user_id"], email)
+    return body
+
+
+def logout() -> bool:
+    """Remove the local config file, discarding any saved credentials.
+
+    Returns:
+        True if a config file was found and removed, False if there was
+        nothing to remove.
+    """
     if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                return config.get("api_key")
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Could not read config file %s: %s",
-                           CONFIG_FILE, exc)
+        CONFIG_FILE.unlink()
+        return True
+    return False
 
-    return None
+
+def whoami(verify: bool = True) -> Optional[Dict[str, Any]]:
+    """Return the identity tied to the locally saved API key.
+
+    Args:
+        verify: If True (default), confirm the key is still valid by
+            calling the server's `/v1/auth/whoami`. If the server can't
+            be reached, falls back to the locally cached identity rather
+            than failing outright, so `ose whoami` still works offline
+            (just without revocation-checking in that case).
+
+    Returns:
+        A dict with `email` and `user_id`, or None if not logged in (or,
+        when `verify=True`, if the server explicitly rejected the saved
+        key -- e.g. it was revoked).
+    """
+    config = _read_config()
+    if not config or not config.get("api_key"):
+        return None
+
+    cached = {"email": config.get("email"), "user_id": config.get("user_id")}
+    if not verify:
+        return cached
+
+    result = _get_once(
+        AUTH_WHOAMI_URL,
+        {"Authorization": f"Bearer {config['api_key']}"},
+        DEFAULT_TIMEOUT_SECONDS,
+    )
+    if result.error is not None or result.status_code is None:
+        logger.debug(
+            "whoami: server unreachable (%s); using cached identity.", result.error
+        )
+        return cached
+    if not (200 <= result.status_code < 300) or not result.body:
+        # The server explicitly rejected the key (e.g. revoked) --
+        # the cached file is stale, so don't hand back a false identity.
+        return None
+
+    return {
+        "email": result.body.get("email", cached["email"]),
+        "user_id": result.body.get("user_id", cached["user_id"]),
+    }
 
 
 def _post_once_httpx(
@@ -400,6 +583,63 @@ def _post_once(
     if _HAS_HTTPX:
         return _post_once_httpx(url, payload, headers, timeout)
     return _post_once_urllib(url, payload, headers, timeout)
+
+
+def _get_once_httpx(url: str, headers: Dict[str, str], timeout: float) -> _HttpResult:
+    """Perform a single HTTP GET using httpx."""
+    import httpx
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=timeout)
+    except httpx.TimeoutException:
+        return _HttpResult(status_code=None, body=None, error="timeout")
+    except httpx.RequestError as exc:
+        return _HttpResult(status_code=None, body=None, error=f"network_error: {exc}")
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    return _HttpResult(status_code=response.status_code, body=body, error=None)
+
+
+def _get_once_urllib(url: str, headers: Dict[str, str], timeout: float) -> _HttpResult:
+    """Perform a single HTTP GET using the standard library as a fallback
+    when `httpx` is not installed."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, headers=headers, method="GET")
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                body = None
+            return _HttpResult(status_code=response.status, body=body, error=None)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            body = None
+        return _HttpResult(status_code=exc.code, body=body, error=None)
+    except TimeoutError:
+        return _HttpResult(status_code=None, body=None, error="timeout")
+    except urllib.error.URLError as exc:
+        reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+        if "timed out" in reason.lower():
+            return _HttpResult(status_code=None, body=None, error="timeout")
+        return _HttpResult(status_code=None, body=None, error=f"network_error: {reason}")
+
+
+def _get_once(url: str, headers: Dict[str, str], timeout: float) -> _HttpResult:
+    """Perform a single HTTP GET, preferring httpx and falling back to urllib."""
+    if _HAS_HTTPX:
+        return _get_once_httpx(url, headers, timeout)
+    return _get_once_urllib(url, headers, timeout)
 
 
 def _call_server(manifest: Dict[str, Any], api_key: str) -> Dict[str, Any]:

@@ -69,6 +69,7 @@ ose-test-project
 
 # Test outputs
 *.json
+.npmrc
 !*.json.example
 
 # Logs
