@@ -27,6 +27,8 @@ Typical programmatic usage::
 """
 
 from __future__ import annotations
+import subprocess
+import shutil
 
 import argparse
 import hashlib
@@ -237,6 +239,13 @@ class OseParser:
             },
             "truncated": truncated,
         }
+        # Optional Semgrep pass — runs only when semgrep is installed and
+        # cyber_rules/ exists next to this file. Results are attached under
+        # "semgrep_findings" and never alter the files[] list or Contract A
+        # validation, so the server pipeline is unaffected if semgrep is absent.
+        semgrep_findings = self._run_semgrep()
+        if semgrep_findings is not None:
+            payload["semgrep_findings"] = semgrep_findings
 
         logger.info(
             "Scan complete: %d files processed, %d errors, %.4fs elapsed.",
@@ -502,6 +511,83 @@ class OseParser:
             "version": version,
             "language": "nodejs",
         }
+
+    def _run_semgrep(self) -> Optional[List[Dict[str, Any]]]:
+        """Run Semgrep with the bundled cyber_rules/ YAML rules, if available.
+
+        Returns a list of finding dicts, or None if semgrep is not installed
+        or no rule files exist. Never raises -- errors are logged and swallowed
+        so a missing semgrep installation never breaks the core scan.
+        """
+        if shutil.which("semgrep") is None:
+            logger.debug("semgrep not found on PATH; skipping Semgrep pass.")
+            return None
+
+        rules_dir = Path(__file__).parent / "cyber_rules"
+        if not rules_dir.is_dir():
+            logger.debug(
+                "client/cyber_rules/ not found; skipping Semgrep pass.")
+            return None
+
+        cmd = [
+            "semgrep",
+            "--config", str(rules_dir),
+            "--json",
+            "--quiet",
+            str(self.root_path),
+        ]
+        logger.info("Running Semgrep: %s", " ".join(cmd))
+
+        try:
+            result = subprocess.run(  # noqa: S603 — cmd is fully constructed here, no user input
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except FileNotFoundError:
+            logger.debug("semgrep binary disappeared between check and run.")
+            return None
+        except subprocess.TimeoutExpired:
+            logger.warning("Semgrep timed out after 120s; skipping results.")
+            return None
+        except OSError as exc:
+            logger.warning("Semgrep execution error: %s", exc)
+            return None
+
+        # semgrep exits 1 when findings exist
+        if result.returncode not in (0, 1):
+            logger.warning(
+                "Semgrep exited %d; stderr: %s", result.returncode, result.stderr[:400]
+            )
+            return None
+
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            logger.warning("Could not parse Semgrep JSON output: %s", exc)
+            return None
+
+        raw_results = data.get("results", [])
+        findings = []
+        for r in raw_results:
+            meta = r.get("extra", {}).get("metadata", {})
+            findings.append({
+                "rule_id": r.get("check_id", ""),
+                "file_path": str(
+                    Path(r.get("path", "")).relative_to(self.root_path)
+                    if r.get("path", "").startswith(str(self.root_path))
+                    else r.get("path", "")
+                ),
+                "line_start": r.get("start", {}).get("line", 0),
+                "line_end": r.get("end", {}).get("line", 0),
+                "message": r.get("extra", {}).get("message", ""),
+                "severity": r.get("extra", {}).get("severity", "WARNING"),
+                "ose_class": meta.get("ose_class", ""),
+            })
+
+        logger.info("Semgrep pass complete: %d finding(s).", len(findings))
+        return findings
 
     def _compute_project_identifier(self) -> str:
         """Compute an anonymized identifier for the project root.

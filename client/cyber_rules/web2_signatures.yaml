@@ -1,0 +1,198 @@
+rules:
+
+  # ---------------------------------------------------------------------------
+  # BROKEN_AUTH – financial mutation without auth guard
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-broken-auth-balance-mutation
+    patterns:
+      - pattern: |
+          async function $FUNC(...) {
+            ...
+            $OBJ.balance = ...;
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            ...
+            if (!$REQ.session ...) { ... }
+            ...
+            $OBJ.balance = ...;
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            ...
+            require(...);
+            ...
+            $OBJ.balance = ...;
+            ...
+          }
+    message: >
+      Function mutates `$OBJ.balance` without a preceding authentication
+      or authorization check. An unauthenticated caller may be able to
+      modify balances directly.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: BROKEN_AUTH
+      cwe: "CWE-306"
+      owasp: "A01:2021"
+
+  - id: ose-web2-broken-auth-balance-decrement
+    patterns:
+      - pattern: $OBJ.balance -= $AMOUNT;
+      - pattern-not-inside: |
+          if ($AUTH) { ... }
+          ...
+      - pattern-not-inside: |
+          require($AUTH);
+          ...
+    message: >
+      Balance decrement `$OBJ.balance -= $AMOUNT` may occur without a
+      prior authorization check. Verify the caller is authenticated and
+      owns the account.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: BROKEN_AUTH
+      cwe: "CWE-306"
+
+  # ---------------------------------------------------------------------------
+  # UNCHECKED_EXTERNAL_CALL – no result check before state mutation
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-unchecked-stripe-before-mutation
+    patterns:
+      - pattern: |
+          await stripe.charges.create(...);
+          ...
+          $OBJ.$FIELD -= $AMOUNT;
+      - pattern-not: |
+          const $RESULT = await stripe.charges.create(...);
+          if ($RESULT.status !== "succeeded") { ... }
+          ...
+    message: >
+      Stripe charge result is not checked before decrementing `$OBJ.$FIELD`.
+      If the charge fails, the balance is still decremented, leading to
+      state inconsistency.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: UNCHECKED_EXTERNAL_CALL
+      cwe: "CWE-754"
+
+  - id: ose-web2-unchecked-flutterwave-before-mutation
+    patterns:
+      - pattern: |
+          await flutterwave.$METHOD(...);
+          ...
+          $OBJ.$FIELD -= $AMOUNT;
+      - pattern-not: |
+          const $RESULT = await flutterwave.$METHOD(...);
+          if ($RESULT.status !== "success") { ... }
+          ...
+    message: >
+      Flutterwave call result is not checked before financial state mutation.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: UNCHECKED_EXTERNAL_CALL
+      cwe: "CWE-754"
+
+  # ---------------------------------------------------------------------------
+  # DOUBLE_SPEND – check-then-act race on balance
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-double-spend-race
+    patterns:
+      - pattern: |
+          if ($OBJ.balance < $AMOUNT) { ... }
+          ...
+          await $EXTERNAL_CALL(...);
+          ...
+          $OBJ.balance -= $AMOUNT;
+    message: >
+      Classic double-spend race: balance is checked, an async external call
+      suspends execution, and balance is decremented only afterwards. A
+      concurrent request can pass the same check before the first request
+      updates the balance. Use atomic deduction before the external call.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: DOUBLE_SPEND
+      cwe: "CWE-362"
+      owasp: "A04:2021"
+
+  # ---------------------------------------------------------------------------
+  # PRIVILEGE_ESCALATION – role taken from req.body
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-privilege-escalation-role-from-body
+    patterns:
+      - pattern: req.body.role
+      - pattern-inside: |
+          if (...req.body.role...) { ... }
+    message: >
+      Authorization decision is derived from `req.body.role`. A caller can
+      set this value to any role, granting themselves elevated privileges.
+      Enforce roles server-side from a trusted source (session, DB, JWT).
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: PRIVILEGE_ESCALATION
+      cwe: "CWE-269"
+      owasp: "A01:2021"
+
+  - id: ose-web2-privilege-escalation-isadmin-from-body
+    patterns:
+      - pattern: req.body.isAdmin
+    message: >
+      `req.body.isAdmin` is attacker-controlled. Never derive authorization
+      decisions from client-supplied input.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      ose_class: PRIVILEGE_ESCALATION
+      cwe: "CWE-269"
+
+  # ---------------------------------------------------------------------------
+  # MISSING_VALIDATION – amount not validated before use
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-missing-amount-validation
+    patterns:
+      - pattern: |
+          const $AMOUNT = req.body.amount;
+          ...
+          $OBJ.balance -= $AMOUNT;
+      - pattern-not: |
+          const $AMOUNT = req.body.amount;
+          ...
+          if ($AMOUNT <= 0 ...) { ... }
+          ...
+          $OBJ.balance -= $AMOUNT;
+    message: >
+      `req.body.amount` is used in a balance mutation without a positivity /
+      range check. A negative or zero value could be exploited to increase
+      a balance instead of decreasing it.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      ose_class: MISSING_VALIDATION
+      cwe: "CWE-20"
+
+  # ---------------------------------------------------------------------------
+  # INVALID_STATE_TRANSITION – order marked complete without payment check
+  # ---------------------------------------------------------------------------
+  - id: ose-web2-order-completed-without-payment
+    patterns:
+      - pattern: $ORDER.status = "completed";
+      - pattern-not-inside: |
+          if ($PAYMENT.status === "success" ...) { ... }
+      - pattern-not-inside: |
+          if ($PAYMENT.status === "successful" ...) { ... }
+    message: >
+      Order status is set to "completed" without verifying that payment
+      succeeded first. An attacker may be able to complete an order without
+      paying.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      ose_class: INVALID_STATE_TRANSITION
+      cwe: "CWE-840"

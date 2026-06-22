@@ -1,0 +1,148 @@
+rules:
+
+  # ---------------------------------------------------------------------------
+  # REENTRANCY – state update after external call
+  # ---------------------------------------------------------------------------
+  - id: ose-web3-reentrancy-balance-after-call
+    patterns:
+      - pattern: |
+          function $FUNC(...) external ... {
+            ...
+            $ADDR.call{...}(...);
+            ...
+            balances[$MSG] -= $AMOUNT;
+            ...
+          }
+    message: >
+      Reentrancy vulnerability: external call occurs before the balance
+      deduction. Apply the checks-effects-interactions pattern -- update
+      state BEFORE making external calls. Also add OpenZeppelin's
+      `nonReentrant` modifier as defence-in-depth.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: REENTRANCY
+      cwe: "CWE-841"
+      swc: "SWC-107"
+
+  - id: ose-web3-reentrancy-transfer-after-call
+    patterns:
+      - pattern: |
+          (bool $SUCCESS,) = $ADDR.call{value: $AMOUNT}("");
+          ...
+          balances[$ADDR] = 0;
+      - pattern-not: |
+          balances[$ADDR] = 0;
+          ...
+          (bool $SUCCESS,) = $ADDR.call{value: $AMOUNT}("");
+    message: >
+      Balance is zeroed AFTER the external ETH call, not before.
+      Moves the deduction to before the call to prevent reentrancy.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: REENTRANCY
+      cwe: "CWE-841"
+      swc: "SWC-107"
+
+  # ---------------------------------------------------------------------------
+  # TX_ORIGIN_ABUSE – tx.origin used for authorization
+  # ---------------------------------------------------------------------------
+  - id: ose-web3-tx-origin-auth
+    patterns:
+      - pattern: require(tx.origin == ...);
+    message: >
+      `tx.origin` is phishable: a malicious contract can call yours on behalf
+      of the victim. Use `msg.sender` for authorization instead.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: TX_ORIGIN_ABUSE
+      cwe: "CWE-807"
+      swc: "SWC-115"
+
+  - id: ose-web3-tx-origin-if
+    patterns:
+      - pattern: |
+          if (tx.origin == ...) { ... }
+    message: >
+      Authorization based on `tx.origin` is unsafe. Phishing contracts can
+      exploit this. Replace with `msg.sender`.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: TX_ORIGIN_ABUSE
+      swc: "SWC-115"
+
+  # ---------------------------------------------------------------------------
+  # ARITHMETIC_OVERFLOW – unchecked arithmetic on uint (Solidity < 0.8)
+  # ---------------------------------------------------------------------------
+  - id: ose-web3-unchecked-uint-arithmetic
+    patterns:
+      - pattern: $X + $Y
+      - pattern-not-inside: |
+          pragma solidity ^0.8.$VERSION;
+          ...
+      - pattern-inside: |
+          uint$N $X;
+          ...
+    message: >
+      Unchecked integer arithmetic on `uint`. In Solidity < 0.8, this can
+      silently overflow. Use SafeMath or upgrade to Solidity 0.8+.
+    languages: [solidity]
+    severity: WARNING
+    metadata:
+      ose_class: ARITHMETIC_OVERFLOW
+      swc: "SWC-101"
+
+  # ---------------------------------------------------------------------------
+  # BROKEN_ACCESS_CONTROL – missing onlyOwner on state-changing function
+  # ---------------------------------------------------------------------------
+  - id: ose-web3-missing-owner-guard
+    patterns:
+      - pattern: |
+          function withdraw(...) external {
+            ...
+            $ADDR.transfer($AMOUNT);
+            ...
+          }
+      - pattern-not: |
+          function withdraw(...) external onlyOwner {
+            ...
+          }
+      - pattern-not: |
+          function withdraw(...) external {
+            require(msg.sender == owner, ...);
+            ...
+          }
+    message: >
+      `withdraw` is callable by any address. Add `onlyOwner` or an
+      equivalent role check to restrict who can withdraw funds.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: BROKEN_ACCESS_CONTROL
+      cwe: "CWE-284"
+      swc: "SWC-105"
+
+  # ---------------------------------------------------------------------------
+  # DOUBLE_SPEND – flash-loan / read-before-update pattern
+  # ---------------------------------------------------------------------------
+  - id: ose-web3-balance-read-before-update
+    patterns:
+      - pattern: |
+          uint $BAL = balances[$MSG];
+          ...
+          $ADDR.call{...}(...);
+          ...
+          balances[$MSG] = $BAL - $AMOUNT;
+    message: >
+      Balance is read into a local variable, an external call is made
+      (potential reentrant call or flash-loan window), then the storage
+      is updated with the stale local value. Deduct from storage directly
+      before the external call.
+    languages: [solidity]
+    severity: ERROR
+    metadata:
+      ose_class: DOUBLE_SPEND
+      swc: "SWC-107"

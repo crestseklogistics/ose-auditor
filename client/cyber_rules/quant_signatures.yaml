@@ -1,0 +1,163 @@
+rules:
+
+  # ---------------------------------------------------------------------------
+  # SLIPPAGE_OMISSION – market order without deviation/slippage parameter
+  # ---------------------------------------------------------------------------
+  - id: ose-quant-python-slippage-omission
+    patterns:
+      - pattern: |
+          broker.send_order(
+            symbol=$SYMBOL,
+            volume=$VOL,
+            type=$TYPE,
+          )
+      - pattern-not: |
+          broker.send_order(
+            ...,
+            deviation=...,
+            ...
+          )
+      - pattern-not: |
+          broker.send_order(
+            ...,
+            slippage=...,
+            ...
+          )
+    message: >
+      Market order `broker.send_order` is placed without a `deviation`
+      (slippage) parameter. The order may fill at an unfavourable price
+      during high volatility. Specify `deviation=MAX_SLIPPAGE_POINTS`.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      ose_class: SLIPPAGE_OMISSION
+      track: quant
+
+  - id: ose-quant-python-order-no-retcode-check
+    patterns:
+      - pattern: |
+          $RESULT = broker.send_order(...)
+      - pattern-not: |
+          $RESULT = broker.send_order(...)
+          if $RESULT.retcode != ...: ...
+      - pattern-not: |
+          $RESULT = broker.send_order(...)
+          if not $RESULT: ...
+    message: >
+      Broker `send_order` return value is not checked for error codes.
+      A failed order will be silently ignored, leaving the strategy in an
+      inconsistent state. Always validate `result.retcode`.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      ose_class: UNCHECKED_EXTERNAL_CALL
+      track: quant
+
+  # ---------------------------------------------------------------------------
+  # MISSING_VALIDATION – unbounded lot size from user input
+  # ---------------------------------------------------------------------------
+  - id: ose-quant-python-unbounded-lot
+    patterns:
+      - pattern: |
+          $LOT = $REQUEST.$FIELD
+          ...
+          broker.send_order(..., volume=$LOT, ...)
+      - pattern-not: |
+          if $LOT <= 0 ...: ...
+          ...
+      - pattern-not: |
+          if $LOT > $MAX ...: ...
+          ...
+    message: >
+      Lot size is derived from external input without a bounds check.
+      An excessively large lot could blow up a margin account. Clamp
+      `$LOT` to a validated range before placing the order.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      ose_class: MISSING_VALIDATION
+      track: quant
+
+  # ---------------------------------------------------------------------------
+  # RACE_CONDITION – async order placement without lock
+  # ---------------------------------------------------------------------------
+  - id: ose-quant-python-concurrent-order-no-lock
+    patterns:
+      - pattern: |
+          async def $FUNC(...):
+            ...
+            await $BROKER.$METHOD(...)
+            ...
+            self.$BALANCE -= $AMOUNT
+      - pattern-not: |
+          async def $FUNC(...):
+            async with self.$LOCK:
+              ...
+    message: >
+      Async order function `$FUNC` mutates `self.$BALANCE` without
+      holding a lock. Concurrent coroutines can race, sending duplicate
+      orders or corrupting the position ledger. Use `asyncio.Lock`.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      ose_class: RACE_CONDITION
+      track: quant
+
+  # ---------------------------------------------------------------------------
+  # LOGIC_FLAW – stop-loss not set on order
+  # ---------------------------------------------------------------------------
+  - id: ose-quant-python-missing-stoploss
+    patterns:
+      - pattern: |
+          broker.send_order(
+            ...,
+            type=$TYPE,
+            ...
+          )
+      - pattern-not: |
+          broker.send_order(
+            ...,
+            sl=...,
+            ...
+          )
+      - pattern-not: |
+          broker.send_order(
+            ...,
+            stop_loss=...,
+            ...
+          )
+    message: >
+      Market/limit order placed without a stop-loss (`sl`) parameter.
+      An unprotected position can suffer unlimited drawdown.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      ose_class: LOGIC_FLAW
+      track: quant
+
+  # ---------------------------------------------------------------------------
+  # MQL5 – OrderSend without error check
+  # ---------------------------------------------------------------------------
+  - id: ose-quant-mql-ordersend-no-check
+    pattern: |
+      OrderSend($SYMBOL, $CMD, $LOT, $PRICE, $SLIP, $SL, $TP);
+    message: >
+      `OrderSend` return value is discarded. Always check the returned
+      ticket number and `GetLastError()` to confirm the order was placed.
+    languages: [mql4, mql5]
+    severity: ERROR
+    metadata:
+      ose_class: UNCHECKED_EXTERNAL_CALL
+      track: quant
+
+  - id: ose-quant-mql-zero-stoploss
+    patterns:
+      - pattern: OrderSend($SYM, $CMD, $LOT, $PRICE, $SLIP, 0, $TP);
+    message: >
+      Stop-loss is 0 in `OrderSend`, meaning the position has no
+      downside protection. Always set a non-zero stop-loss.
+    languages: [mql4, mql5]
+    severity: WARNING
+    metadata:
+      ose_class: LOGIC_FLAW
+      track: quant
