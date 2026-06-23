@@ -298,6 +298,12 @@ class OseParser:
             return
 
         for entry in entries:
+            # Skip symlinks: they could point outside the project root
+            # and leak arbitrary files to the server
+            if entry.is_symlink():
+                logger.debug("Skipping symlink: %s", entry)
+                self._total_ignored_files += 1
+                continue
             if entry.is_dir():
                 if self._should_ignore(entry):
                     logger.debug("Skipping ignored directory: %s", entry)

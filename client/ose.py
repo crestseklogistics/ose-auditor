@@ -24,8 +24,11 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import logging
 import sys
+import time
+import urllib.request
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -39,7 +42,90 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     import orchestrator  # type: ignore
 
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
+
+# ---------------------------------------------------------------------------
+# Terminal output helpers (coloured, no dependencies)
+# ---------------------------------------------------------------------------
+
+def _ok(msg: str) -> None:
+    """Print a green checkmark success message."""
+    sys.stderr.write(f"\033[32m✓\033[0m {msg}\n")
+
+def _info(msg: str) -> None:
+    """Print a blue dot informational message."""
+    sys.stderr.write(f"\033[36m·\033[0m {msg}\n")
+
+def _warn(msg: str) -> None:
+    """Print a yellow exclamation warning message."""
+    sys.stderr.write(f"\033[33m!\033[0m {msg}\n")
+
+def _err(msg: str) -> None:
+    """Print a red cross error message."""
+    sys.stderr.write(f"\033[31m✗\033[0m {msg}\n")
+
+def _dim(msg: str) -> None:
+    """Print a dimmed separator line."""
+    sys.stderr.write(f"\033[2m│\033[0m {msg}\n")
+
+def _check_for_updates() -> None:
+    """Check PyPI for a newer version once per day. Silent on any error.
+
+    Writes to stderr only, and only when stdout is a TTY, so JSON
+    piping (``ose audit . > report.json``) is never contaminated.
+    """
+    if not sys.stdout.isatty():
+        return
+
+    config_dir = Path.home() / ".ose"
+    config_file = config_dir / "config.json"
+
+    config: dict = {}
+    try:
+        if config_file.exists():
+            with open(config_file, "r", encoding="utf-8") as fh:
+                config = json.load(fh)
+    except Exception:
+        pass
+
+    now = int(time.time())
+    if now - config.get("last_update_check", 0) < 86400:
+        return
+
+    config["last_update_check"] = now
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        with open(config_file, "w", encoding="utf-8") as fh:
+            json.dump(config, fh, indent=2)
+    except Exception:
+        pass
+
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/ose-auditor/json",
+            headers={"User-Agent": f"ose-auditor/{__version__}/update-check"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode())
+        latest = data.get("info", {}).get("version", "")
+        if not latest:
+            return
+
+        def _parse(v: str) -> tuple:
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except Exception:
+                return (0,)
+
+        if _parse(latest) > _parse(__version__):
+            sys.stderr.write(
+                f"\n\033[33m[ose]\033[0m Update available: "
+                f"v{__version__} → \033[32mv{latest}\033[0m\n"
+                f"      Run: \033[36mpipx upgrade ose-auditor\033[0m\n\n"
+            )
+    except Exception:
+        pass
+
 
 #: Exit code constants for clarity and reuse.
 EXIT_SUCCESS = 0
@@ -146,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show which account is currently logged in.",
     ).set_defaults(command="whoami")
 
+    subparsers.add_parser(
+        "buy",
+        help="Purchase a credit pack to run more audits.",
+    ).set_defaults(command="buy")
+
     return parser
 
 
@@ -210,6 +301,60 @@ def _prompt_credentials() -> tuple[str, str]:
     password = getpass.getpass("Password: ")
     return email, password
 
+def _run_buy() -> int:
+    """Interactive credit pack purchase. Prints a Flutterwave URL to stdout.
+
+    Flow:
+      1. Confirm the user is logged in.
+      2. Show available packs in a numbered menu.
+      3. Confirm selection.
+      4. Print the checkout URL — payment is completed in the browser.
+      5. The Node.js webhook on api.crestsek.com credits the account
+         automatically after payment; the user runs ``ose whoami`` to confirm.
+    """
+    identity = orchestrator.whoami(verify=False)
+    if not identity or not identity.get("user_id"):
+        _info("You must be logged in first.\nRun: ose login")
+        return EXIT_GENERAL_ERROR
+
+    user_id = identity["user_id"]
+
+    PACKS = [
+        ("starter",    " $5.00",  50,   "https://flutterwave.com/pay/k4vnhabz2rua"),
+        ("pro_hacker", "$25.00",  300,  "https://flutterwave.com/pay/0uyg1qynjtnf"),
+        ("enterprise", "$100.00", 1500, "https://flutterwave.com/pay/sidx1mpgltvx"),
+    ]
+
+    while True:
+        _info("\nCredit packs:\n")
+        for i, (name, price, credits, _) in enumerate(PACKS, 1):
+            label = name.replace("_", " ").title()
+            print(f"  [{i}] {label:<15} {price}   {credits:>4} credits")
+        print("  [4] Cancel\n")
+
+        choice = input("Select (1-4): ").strip()
+        if choice in ("4", "q", "cancel"):
+            _info("Cancelled.")
+            return EXIT_SUCCESS
+        if choice not in ("1", "2", "3"):
+            _warn("Please enter 1, 2, 3 or 4.")
+            continue
+
+        idx = int(choice) - 1
+        pack_name, price, credits, base_url = PACKS[idx]
+        label = pack_name.replace("_", " ").title()
+
+        print(f"\n  {label} — {credits} credits for {price}")
+        confirm = input("  Proceed? (y/n): ").strip().lower()
+        if confirm != "y":
+            continue
+
+        url = f"{base_url}?user_id={user_id}"
+        print(f"\n  Pay here:\n\n    {url}\n")
+        _info("  After payment your credits update automatically.")
+        _info("  Run `ose whoami` to confirm your new balance.\n")
+        return EXIT_SUCCESS
+
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Parse CLI arguments and execute the requested OSE Auditor command.
@@ -235,6 +380,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if getattr(args, "command", None) is None:
         parser.print_help(sys.stderr)
         return EXIT_GENERAL_ERROR
+    _check_for_updates()
 
     if args.command == "audit":
         configure_logging(debug=args.debug)
@@ -280,13 +426,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         try:
             if args.command == "signup":
-                result = orchestrator.signup(email, password)
-                print(f"Account created. Logged in as {email} "
-                      f"(user_id={result.get('user_id')}).")
+                orchestrator.signup(email, password)
+                _ok(f"Account created. Logged in as {email}.")
             else:
-                result = orchestrator.login(email, password)
-                print(
-                    f"Logged in as {email} (user_id={result.get('user_id')}).")
+                orchestrator.login(email, password)
+                _ok(
+                    f"Logged in as {email}.")
         except orchestrator.ServerCommunicationError as exc:
             logger.error("%s", exc)
             return EXIT_GENERAL_ERROR
@@ -299,9 +444,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "logout":
         configure_logging(debug=False)
         if orchestrator.logout():
-            print("Logged out.")
+            _info("Logged out.")
         else:
-            print("Not logged in.")
+            _warn("Not logged in.")
         return EXIT_SUCCESS
 
     if args.command == "whoami":
@@ -313,11 +458,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_GENERAL_ERROR
 
         if identity:
-            print(f"Logged in as {identity.get('email', 'unknown')} "
-                  f"(user_id={identity.get('user_id', 'unknown')})")
+            _ok(f"Logged in as {identity.get('email', 'unknown')}")
         else:
-            print("Not logged in. Run `ose login` (or `ose signup`) first.")
+            _warn("Not logged in. Run `ose login` (or `ose signup`) first.")
         return EXIT_SUCCESS
+    if args.command == "buy":
+        configure_logging(debug=False)
+        return _run_buy()
 
     # Unreachable in practice since argparse restricts valid subcommands,
     # but kept as a defensive fallback.
