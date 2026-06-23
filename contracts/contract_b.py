@@ -57,7 +57,7 @@ class ValidationError(Exception):
 # --------------------------------------------------------------------------
 
 VERSION = "1.0.0"
-MAX_FINDINGS = 100
+MAX_FINDINGS = 500
 DEFAULT_CONFIDENCE = 0.5
 
 MAX_CODE_SNIPPET_LENGTH = 4096
