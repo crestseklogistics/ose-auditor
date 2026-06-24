@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ose-auditor"
-version = "1.1.4"
+version = "1.1.5"
 description = "OSE Auditor: a financial-logic security scanner for Node.js/TypeScript projects."
 readme = "description.md"
 requires-python = ">=3.9"
@@ -35,7 +35,7 @@ classifiers = [
 # it is NOT a hard dependency here -- listed under [project.optional-dependencies]
 # instead so a bare `pip install ose-auditor` stays dependency-light.
 dependencies = [
-"ose-auditor-fsa>=1.0.2",
+"ose-auditor-fsa>=1.0.3",
 ]
 
 [project.optional-dependencies]

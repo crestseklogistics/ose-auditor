@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     import orchestrator  # type: ignore
 
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
 # ---------------------------------------------------------------------------
 # Terminal output helpers (coloured, no dependencies)
