@@ -67,6 +67,9 @@ IGNORE_DIRS = frozenset(
 ALLOWED_EXTENSIONS: Dict[str, str] = {
     ".js": "js",
     ".ts": "ts",
+    ".jsx": "jsx",
+    ".tsx": "tsx",
+    ".sol": "sol",
 }
 
 #: Maximum number of files processed in a single scan before truncation.
@@ -310,7 +313,7 @@ class OseParser:
                     self._total_ignored_dirs += 1
                     continue
                 self._walk(entry, collected)
-            elif entry.is_file():
+            elif entry.is_file() and not entry.is_symlink():
                 if entry.suffix in ALLOWED_EXTENSIONS:
                     collected.append(entry)
                 else:

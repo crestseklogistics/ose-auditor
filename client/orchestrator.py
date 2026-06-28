@@ -142,6 +142,32 @@ def run_audit(project_path: str, output_file: Optional[str], debug: bool) -> int
     except Exception as exc:
         logger.error("Contract A validation failed: %s", exc)
         return EXIT_GENERAL_ERROR
+    # ── Web3 branch ───────────────────────────────────────────────────────
+    # If the project contains Solidity files, run the Web3 pipeline
+    # (Web3Parser + solidity_signatures + adversarial AI agent) in addition
+    # to (or instead of) the Web2 FSA.
+    sol_files = [
+        f for f in validated_index.get("files", [])
+        if f.get("language") == "sol"
+    ]
+    if sol_files:
+        try:
+            from client.web3_parser import Web3Parser
+            web3_parser = Web3Parser(project_path)
+            web3_index = web3_parser.scan()
+        except Exception as exc:
+            logger.warning("Web3 parser failed: %s", exc)
+            web3_index = None
+        if web3_index:
+            try:
+                web3_findings = _run_web3_analysis(web3_index, project_path)
+                # Merge web3 findings into the manifest that goes to the server
+                # They are tagged with track="web3" so the server uses the
+                # correct prompt and credits 5 credits.
+                validated_index.setdefault(
+                    "web3_findings", []).extend(web3_findings)
+            except Exception as exc:
+                logger.warning("Web3 analysis failed: %s", exc)
 
     # Step 4/5: Run the FSA (or mock) and validate Contract B.
     try:
@@ -873,9 +899,70 @@ def _get_mock_manifest(project_index: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _run_web3_analysis(web3_index: Dict[str, Any], project_path: str) -> List[Dict[str, Any]]:
+    """
+    Run the rule-based Solidity FSA against each file in web3_index.
+
+    Returns a list of finding dicts in the same shape as Contract B findings.
+    The adversarial AI agent is NOT called here — it is called server-side
+    via POST /v1/agent/audit_solidity to keep the client lightweight and
+    avoid LLM calls from the CLI when the user has no findings yet.
+    """
+    try:
+        from server.fsa_engine.solidity_signatures import match_rules
+    except ImportError:
+        logger.warning(
+            "solidity_signatures not available; skipping rule-based Web3 FSA.")
+        return []
+
+    findings: List[Dict[str, Any]] = []
+    counter = [0]
+    for file_entry in web3_index.get("files", []):
+        matches = match_rules(file_entry)
+        for match in matches:
+            counter[0] += 1
+            vuln_class = match.get("class", "UNKNOWN")
+            abbr_map = {
+                "REENTRANCY": "REENT",
+                "TX_ORIGIN_ABUSE": "TXORIG",
+                "ARITHMETIC_OVERFLOW": "ARITH",
+                "BROKEN_ACCESS_CONTROL": "BACCESS",
+                "FLASH_LOAN_ORACLE_MANIPULATION": "FLASHLOAN",
+                "UNCHECKED_EXTERNAL_CALL": "UNCHK",
+            }
+            abbr = abbr_map.get(vuln_class, "UNKN")
+            finding_id = f"FSA-{abbr}-{counter[0]:03d}"
+            findings.append({
+                "id": finding_id,
+                "file_path": file_entry.get("path_relative", ""),
+                "line_start": match.get("line_start", 1),
+                "line_end": match.get("line_end", 1),
+                "vulnerability_class": vuln_class,
+                "severity": _web3_severity(vuln_class),
+                "code_snippet": match.get("snippet", "")[:4096],
+                "description": match.get("description", ""),
+                "fix_principle": match.get("fix_principle", ""),
+                "confidence": match.get("confidence", 0.7),
+                "false_positive_risk": "MEDIUM",
+                "track": "web3",
+            })
+    return findings
+
+
+def _web3_severity(vuln_class: str) -> str:
+    return {
+        "REENTRANCY": "CRITICAL",
+        "TX_ORIGIN_ABUSE": "HIGH",
+        "ARITHMETIC_OVERFLOW": "MEDIUM",
+        "BROKEN_ACCESS_CONTROL": "HIGH",
+        "FLASH_LOAN_ORACLE_MANIPULATION": "CRITICAL",
+        "UNCHECKED_EXTERNAL_CALL": "HIGH",
+    }.get(vuln_class, "MEDIUM")
+
 # ---------------------------------------------------------------------------
 # Standalone execution (for testing)
 # ---------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
     import sys

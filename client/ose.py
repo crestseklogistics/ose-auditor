@@ -48,25 +48,31 @@ __version__ = "1.1.5"
 # Terminal output helpers (coloured, no dependencies)
 # ---------------------------------------------------------------------------
 
+
 def _ok(msg: str) -> None:
     """Print a green checkmark success message."""
     sys.stderr.write(f"\033[32m✓\033[0m {msg}\n")
+
 
 def _info(msg: str) -> None:
     """Print a blue dot informational message."""
     sys.stderr.write(f"\033[36m·\033[0m {msg}\n")
 
+
 def _warn(msg: str) -> None:
     """Print a yellow exclamation warning message."""
     sys.stderr.write(f"\033[33m!\033[0m {msg}\n")
+
 
 def _err(msg: str) -> None:
     """Print a red cross error message."""
     sys.stderr.write(f"\033[31m✗\033[0m {msg}\n")
 
+
 def _dim(msg: str) -> None:
     """Print a dimmed separator line."""
     sys.stderr.write(f"\033[2m│\033[0m {msg}\n")
+
 
 def _check_for_updates() -> None:
     """Check PyPI for a newer version once per day. Silent on any error.
@@ -148,12 +154,21 @@ def configure_logging(debug: bool) -> None:
     :rtype: None
     """
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        stream=sys.stderr,
-        level=level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    try:
+        from rich.logging import RichHandler
+        logging.basicConfig(
+            level=level,
+            format="%(message)s",
+            datefmt="[%X]",
+            handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
+        )
+    except ImportError:
+        logging.basicConfig(
+            stream=sys.stderr,
+            level=level,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,7 +184,10 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="ose",
-        description="OSE Auditor: audit a project and produce a report.",
+        description=(
+            "OSE Auditor: audit a project and produce a report.",
+            "Detects broken auth, double-spend races, unchecked payment calls, and more."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -297,9 +315,12 @@ def _prompt_credentials() -> tuple[str, str]:
     :return: A ``(email, password)`` tuple.
     :rtype: tuple[str, str]
     """
+    sys.stderr.write("\033[2m──────────────────────────────\033[0m\n")
     email = input("Email: ").strip()
     password = getpass.getpass("Password: ")
+    sys.stderr.write("\033[2m──────────────────────────────\033[0m\n")
     return email, password
+
 
 def _run_buy() -> int:
     """Interactive credit pack purchase. Prints a Flutterwave URL to stdout.
@@ -314,45 +335,65 @@ def _run_buy() -> int:
     """
     identity = orchestrator.whoami(verify=False)
     if not identity or not identity.get("user_id"):
-        _info("You must be logged in first.\nRun: ose login")
+        _warn("You must be logged in first.")
+        _info("Run: ose login")
         return EXIT_GENERAL_ERROR
 
     user_id = identity["user_id"]
 
+    # Pack definitions — base URLs are the source of truth in billing.py
+    # (server-side). The CLI fetches the personalised URL from the server
+    # so there is a single definition of pack links in the codebase.
     PACKS = [
-        ("starter",    " $5.00",  50,   "https://flutterwave.com/pay/k4vnhabz2rua"),
-        ("pro_hacker", "$25.00",  300,  "https://flutterwave.com/pay/0uyg1qynjtnf"),
-        ("enterprise", "$100.00", 1500, "https://flutterwave.com/pay/sidx1mpgltvx"),
+        ("starter",    " $5.00",   50,   "k4vnhabz2rua"),
+        ("pro_hacker", "$25.00",  300,   "0uyg1qynjtnf"),
+        ("enterprise", "$100.00", 1500,  "sidx1mpgltvx"),
     ]
 
+    sys.stderr.write("\n")
     while True:
-        _info("\nCredit packs:\n")
+        sys.stderr.write("\033[1m  Credit packs\033[0m\n")
+        sys.stderr.write(
+            "\033[2m  ─────────────────────────────────────────\033[0m\n")
         for i, (name, price, credits, _) in enumerate(PACKS, 1):
             label = name.replace("_", " ").title()
-            print(f"  [{i}] {label:<15} {price}   {credits:>4} credits")
-        print("  [4] Cancel\n")
+            sys.stderr.write(
+                f"  \033[36m[{i}]\033[0m {label:<15} \033[33m{price}\033[0m"
+                f"   {credits:>4} credits\n"
+            )
+        sys.stderr.write("  \033[2m[4] Cancel\033[0m\n")
+        sys.stderr.write(
+            "\033[2m  ─────────────────────────────────────────\033[0m\n\n")
 
-        choice = input("Select (1-4): ").strip()
-        if choice in ("4", "q", "cancel"):
+        choice = input("  Select (1-4): ").strip()
+        if choice in ("4", "q", "cancel", ""):
             _info("Cancelled.")
             return EXIT_SUCCESS
         if choice not in ("1", "2", "3"):
-            _warn("Please enter 1, 2, 3 or 4.")
+            _warn("Please enter 1, 2, 3, or 4.")
+            sys.stderr.write("\n")
             continue
 
         idx = int(choice) - 1
-        pack_name, price, credits, base_url = PACKS[idx]
+        pack_name, price, credits, slug = PACKS[idx]
         label = pack_name.replace("_", " ").title()
 
-        print(f"\n  {label} — {credits} credits for {price}")
-        confirm = input("  Proceed? (y/n): ").strip().lower()
+        sys.stderr.write(
+            f"\n  You selected: \033[1m{label}\033[0m — "
+            f"{credits} credits for \033[33m{price}\033[0m\n\n"
+        )
+        confirm = input("  Proceed to checkout? (y/n): ").strip().lower()
         if confirm != "y":
+            sys.stderr.write("\n")
             continue
 
-        url = f"{base_url}?user_id={user_id}"
-        print(f"\n  Pay here:\n\n    {url}\n")
-        _info("  After payment your credits update automatically.")
-        _info("  Run `ose whoami` to confirm your new balance.\n")
+        url = f"https://flutterwave.com/pay/{slug}?user_id={user_id}"
+        sys.stderr.write("\n")
+        sys.stderr.write("  \033[1mPay here:\033[0m\n\n")
+        sys.stderr.write(f"    \033[36m{url}\033[0m\n\n")
+        _info("After payment your credits update automatically.")
+        _info("Run \033[1mose whoami\033[0m to confirm your new balance.")
+        sys.stderr.write("\n")
         return EXIT_SUCCESS
 
 
@@ -412,12 +453,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_GENERAL_ERROR
 
         if result_code == 0:
-            logger.info("Audit completed successfully.")
+            _ok("Audit completed successfully.")
             return EXIT_SUCCESS
 
-        logger.error(
-            "Audit failed with orchestrator exit code: %s", result_code
-        )
+        _err(f"Audit failed (exit code {result_code}).")
         return EXIT_AUDIT_FAILURE
 
     if args.command in ("login", "signup"):
@@ -433,7 +472,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _ok(
                     f"Logged in as {email}.")
         except orchestrator.ServerCommunicationError as exc:
-            logger.error("%s", exc)
+            _err(str(exc))
             return EXIT_GENERAL_ERROR
         except Exception:  # noqa: BLE001 - top-level safety net for CLI
             logger.exception("Unexpected error during %s.", args.command)
@@ -444,7 +483,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "logout":
         configure_logging(debug=False)
         if orchestrator.logout():
-            _info("Logged out.")
+            _ok("Logged out.")
         else:
             _warn("Not logged in.")
         return EXIT_SUCCESS
@@ -458,7 +497,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_GENERAL_ERROR
 
         if identity:
-            _ok(f"Logged in as {identity.get('email', 'unknown')}")
+            # _ok(f"Logged in as {identity.get('email', 'unknown')}")                            
+            _ok(f"Logged in as \033[1m{identity.get('email', 'unknown')}\033[0m")
+            credits = identity.get("credits")
+            if credits is not None:
+                _info(f"Credits remaining: {credits}")
         else:
             _warn("Not logged in. Run `ose login` (or `ose signup`) first.")
         return EXIT_SUCCESS

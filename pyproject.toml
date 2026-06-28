@@ -36,6 +36,7 @@ classifiers = [
 # instead so a bare `pip install ose-auditor` stays dependency-light.
 dependencies = [
 "ose-auditor-fsa>=1.0.3",
+"rich>=13.0",
 ]
 
 [project.optional-dependencies]
