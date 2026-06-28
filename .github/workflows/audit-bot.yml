@@ -1,0 +1,37 @@
+name: OSE Auditor – GitHub App Audit Bot
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:  # Allows manual trigger from Actions tab
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install PyJWT requests
+
+      - name: Run audit bot
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          OSE_API_KEY: ${{ secrets.OSE_API_KEY }}
+          OSE_BOT_DRY_RUN: ${{ secrets.DRY_RUN || '0' }}
+        run: |
+          # Write the private key to a temp file
+          echo "$GITHUB_APP_PRIVATE_KEY" > /tmp/github_app.pem
+          export GITHUB_APP_PRIVATE_KEY_PATH=/tmp/github_app.pem
+          python scripts/github_app/audit_bot.py
