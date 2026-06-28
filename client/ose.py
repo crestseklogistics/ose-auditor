@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     import orchestrator  # type: ignore
 
 
-__version__ = "1.1.6"
+__version__ = "1.1.7"
 
 # ---------------------------------------------------------------------------
 # Terminal output helpers (coloured, no dependencies)
@@ -185,7 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ose",
         description=(
-            "OSE Auditor: audit a project and produce a report.",
+            "OSE Auditor: audit a project and produce a report."
             "Detects broken auth, double-spend races, unchecked payment calls, and more."
         ),
     )
