@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install PyJWT requests
+          pip install PyJWT requests cryptography
 
       - name: Run audit bot
         env:
