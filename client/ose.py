@@ -23,8 +23,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import copy
 import getpass
 import json
+import os
 import logging
 import sys
 import time
@@ -42,7 +44,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     import orchestrator  # type: ignore
 
 
-__version__ = "1.1.7"
+__version__ = "1.1.8"
 
 # ---------------------------------------------------------------------------
 # Terminal output helpers (coloured, no dependencies)
@@ -254,6 +256,25 @@ def build_parser() -> argparse.ArgumentParser:
         "buy",
         help="Purchase a credit pack to run more audits.",
     ).set_defaults(command="buy")
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Manage MCP (Model Context Protocol) server integration.",
+        description="Commands for configuring OSE Auditor as an MCP tool in your IDE.",
+    )
+    mcp_sub = mcp_parser.add_subparsers(
+        title="mcp commands",
+        dest="mcp_command",
+        metavar="<action>",
+    )
+    mcp_sub.add_parser(
+        "setup",
+        help="Auto-detect your IDE and write the MCP config file.",
+        description=(
+            "Detects Cursor, Claude Code, and VS Code (Cline), then writes "
+            "the correct MCP server config pre-filled with your API key."
+        ),
+    ).set_defaults(command="mcp", mcp_command="setup")
+    mcp_parser.set_defaults(command="mcp")
 
     return parser
 
@@ -396,6 +417,178 @@ def _run_buy() -> int:
         sys.stderr.write("\n")
         return EXIT_SUCCESS
 
+# ---------------------------------------------------------------------------
+# MCP setup helpers
+# ---------------------------------------------------------------------------
+
+
+_OSE_MCP_SERVER_BLOCK = {
+    "command": "ose-mcp",
+    "env": {},
+}
+
+# Each IDE entry: (display_name, config_path_candidates, merge_fn)
+# merge_fn receives (existing_dict, api_key) -> updated_dict
+
+
+def _merge_cursor(existing: dict, api_key: str) -> dict:
+    """Merge OSE MCP entry into ~/.cursor/mcp.json."""
+    data = copy.deepcopy(existing)
+    data.setdefault("mcpServers", {})
+    block = copy.deepcopy(_OSE_MCP_SERVER_BLOCK)
+    block["env"] = {"OSE_API_KEY": api_key}
+    data["mcpServers"]["ose-auditor"] = block
+    return data
+
+
+def _merge_claude(existing: dict, api_key: str) -> dict:
+    """Merge OSE MCP entry into ~/.claude/settings.json (Claude Code)."""
+    data = copy.deepcopy(existing)
+    data.setdefault("mcpServers", {})
+    block = copy.deepcopy(_OSE_MCP_SERVER_BLOCK)
+    block["env"] = {"OSE_API_KEY": api_key}
+    data["mcpServers"]["ose-auditor"] = block
+    return data
+
+
+def _merge_vscode(existing: dict, api_key: str) -> dict:
+    """Merge OSE MCP entry into VS Code mcp.json (Cline extension)."""
+    data = copy.deepcopy(existing)
+    data.setdefault("servers", {})
+    data["servers"]["ose-auditor"] = {
+        "type": "stdio",
+        "command": "ose-mcp",
+        "env": {"OSE_API_KEY": api_key},
+    }
+    return data
+
+
+def _read_json_safe(path: Path) -> dict:
+    """Read a JSON file; return {} if missing or unparseable."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_json(path: Path, data: dict) -> None:
+    """Write a dict as pretty JSON, creating parent dirs as needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _detect_ides() -> list[tuple[str, Path, callable]]:
+    """
+    Return a list of (display_name, config_path, merge_fn) tuples for every
+    IDE whose config directory already exists on this machine.
+
+    Detection is based purely on directory/file presence — we never spawn
+    processes or touch the network. The order (Cursor → Claude Code →
+    VS Code) is stable and deterministic so output is predictable.
+    """
+    home = Path.home()
+    candidates = []
+
+    # ── Cursor ──────────────────────────────────────────────────────────
+    cursor_dir = home / ".cursor"
+    if cursor_dir.is_dir():
+        candidates.append((
+            "Cursor",
+            cursor_dir / "mcp.json",
+            _merge_cursor,
+        ))
+
+    # ── Claude Code / Claude Desktop ────────────────────────────────────
+    # CLAUDE_CONFIG_DIR env var lets users override (e.g. on Windows where
+    # the desktop app uses %APPDATA%/Claude).
+    claude_config_dir_env = os.environ.get("CLAUDE_CONFIG_DIR")
+    if claude_config_dir_env:
+        claude_config_path = Path(claude_config_dir_env) / "settings.json"
+    else:
+        claude_config_path = home / ".claude" / "settings.json"
+    if claude_config_path.parent.is_dir():
+        candidates.append((
+            "Claude Code",
+            claude_config_path,
+            _merge_claude,
+        ))
+
+    # ── VS Code / Cline ─────────────────────────────────────────────────
+    # VS Code stores user settings in platform-specific locations. We probe
+    # the three most common ones and use the first that exists.
+    vscode_user_dirs = [
+        home / ".vscode",                               # generic / Linux snap
+        home / ".config" / "Code" / "User",            # Linux native
+        home / "Library" / "Application Support" / "Code" / "User",  # macOS
+        Path(os.environ.get("APPDATA", "")) / "Code" / "User",       # Windows
+    ]
+    for vscode_dir in vscode_user_dirs:
+        if vscode_dir.is_dir():
+            candidates.append((
+                "VS Code (Cline)",
+                vscode_dir / "mcp.json",
+                _merge_vscode,
+            ))
+            break  # only add once — first match wins
+
+    return candidates
+
+
+def _run_mcp_setup() -> int:
+    """
+    Auto-detect the user's IDE(s) and write the MCP config for each.
+
+    Returns an exit code: EXIT_SUCCESS on full success, EXIT_GENERAL_ERROR
+    if the API key is missing or no IDE was detected.
+    """
+    # ── 1. Load API key ─────────────────────────────────────────────────
+    config = {}
+    config_file = Path.home() / ".ose" / "config.json"
+    if config_file.exists():
+        try:
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    api_key = config.get("api_key") or os.environ.get("OSE_API_KEY", "")
+    if not api_key:
+        _err("No API key found. Run `ose login` first.")
+        return EXIT_GENERAL_ERROR
+
+    # ── 2. Detect IDEs ──────────────────────────────────────────────────
+    ides = _detect_ides()
+    if not ides:
+        _warn(
+            "No supported IDE detected. "
+            "Supported: Cursor (~/.cursor/), Claude Code (~/.claude/), "
+            "VS Code with Cline (~/.vscode/ or ~/.config/Code/)."
+        )
+        _info(
+            "Create the config directory for your IDE and re-run `ose mcp setup`."
+        )
+        return EXIT_GENERAL_ERROR
+
+    # ── 3. Write config for each detected IDE ───────────────────────────
+    any_error = False
+    for display_name, config_path, merge_fn in ides:
+        existing = _read_json_safe(config_path)
+        try:
+            updated = merge_fn(existing, api_key)
+            _write_json(config_path, updated)
+        except OSError as exc:
+            _err(f"Failed to write {config_path}: {exc}")
+            any_error = True
+            continue
+
+        _ok(f"MCP config written to {config_path}")
+        _info(f"API key loaded from {config_file}")
+        _info(f"Restart {display_name} to activate OSE Auditor via MCP.")
+        sys.stderr.write("\n")
+
+    return EXIT_GENERAL_ERROR if any_error else EXIT_SUCCESS
+
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Parse CLI arguments and execute the requested OSE Auditor command.
@@ -497,7 +690,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_GENERAL_ERROR
 
         if identity:
-            # _ok(f"Logged in as {identity.get('email', 'unknown')}")                            
+            # _ok(f"Logged in as {identity.get('email', 'unknown')}")
             _ok(f"Logged in as \033[1m{identity.get('email', 'unknown')}\033[0m")
             credits = identity.get("credits")
             if credits is not None:
@@ -508,6 +701,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "buy":
         configure_logging(debug=False)
         return _run_buy()
+
+    if args.command == "mcp":
+        configure_logging(debug=False)
+        mcp_command = getattr(args, "mcp_command", None)
+        if mcp_command == "setup":
+            return _run_mcp_setup()
+        parser.parse_args(["mcp", "--help"])
+        return EXIT_GENERAL_ERROR
 
     # Unreachable in practice since argparse restricts valid subcommands,
     # but kept as a defensive fallback.
