@@ -173,7 +173,7 @@ Requires Python 3.9+ and a Node.js/TypeScript project to audit.
 <!-- ## Links
 
 - **Homepage:** https://ose.crestsek.com
-- **Docs:** https://ose.crestsek.com/docs
+- **Docs:** https://blogose.crestsek.com/docs
 - **GitHub:** https://github.com/crestseklogistics/ose-auditor
 - **npm:** https://www.npmjs.com/package/ose-auditor
 - **Issues:** https://github.com/crestseklogistics/ose-auditor/issues

@@ -248,7 +248,7 @@ sent to the server for AI patch generation do.
 ## Links
 
 - **Homepage:** [https://ose.crestsek.com](https://ose.crestsek.com)
-- **Docs:** [https://ose.crestsek.com/docs](https://ose.crestsek.com/docs)
+- **Docs:** [https://blogose.crestsek.com/docs](https://blogose.crestsek.com/docs)
 - **GitHub:** [https://github.com/crestseklogistics/ose-auditor](https://github.com/crestseklogistics/ose-auditor)
 - **Issues:** [https://github.com/crestseklogistics/ose-auditor/issues](https://github.com/crestseklogistics/ose-auditor/issues)
 - **npm:** [https://www.npmjs.com/package/ose-auditor](https://www.npmjs.com/package/ose-auditor)
