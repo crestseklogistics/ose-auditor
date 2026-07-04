@@ -544,6 +544,20 @@ def whoami(verify: bool = True) -> Optional[Dict[str, Any]]:
         "user_id": result.body.get("user_id", cached["user_id"]),
     }
 
+def get_checkout(pack_name: str) -> Dict[str, Any]:
+    api_key = _load_api_key()
+    if not api_key:
+        raise ServerCommunicationError("Not logged in.")
+    result = _get_once(
+        f"{_SERVER_BASE_URL}/v1/checkout/{pack_name}",
+        {"Authorization": f"Bearer {api_key}"},
+        DEFAULT_TIMEOUT_SECONDS,
+    )
+    if result.error is not None or result.status_code is None:
+        raise ServerCommunicationError(f"Could not reach OSE Server: {result.error}")
+    if not (200 <= result.status_code < 300) or result.body is None:
+        raise ServerCommunicationError(f"Checkout request failed (HTTP {result.status_code}).")
+    return result.body
 
 def _post_once_httpx(
     url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: float

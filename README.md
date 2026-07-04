@@ -1,92 +1,84 @@
 # OSE Auditor
 
-**OSE Auditor** is an autonomous financial and logic exploit detection engine that uses deterministic code analysis and AI remediation to discover money-losing vulnerabilities before deployment.
+**OSE Auditor** helps engineering teams identify business logic and financial security vulnerabilities before software reaches production.
 
-It targets **Node.js / TypeScript** backends and surfaces vulnerabilities that generic AI models and traditional SAST tools miss: broken authorization before financial mutations, double-spend races, unchecked external payment calls, privilege escalation via user-controlled roles, invalid order lifecycle transitions, and more.
+Unlike traditional static analysis tools that primarily focus on language-level vulnerability patterns, OSE Auditor analyzes application behavior to identify risks such as authorization flaws, double-spend race conditions, settlement workflow issues, unsafe external payment handling, privilege escalation, and other business-critical security problems.
+
+Designed for modern **Node.js**, **TypeScript**, **Web3**, and **Quantitative Finance** applications.
 
 ---
 
-## Quick start
+## Quick Start
 
-### Option 1 – pipx (recommended for most users)
+### Install with pipx (Recommended)
 
 ```bash
-# Install pipx if you don't have it
-# macOS:
+# Install pipx (one-time setup)
+
+# macOS
 brew install pipx && pipx ensurepath
 
-# Linux:
-sudo apt install pipx && pipx ensurepath   # Ubuntu/Debian
-# or: python3 -m pip install --user pipx
+# Ubuntu / Debian
+sudo apt install pipx && pipx ensurepath
 
-# Windows (PowerShell):
+# Windows (PowerShell)
 python -m pip install --user pipx
 
 # Install OSE Auditor
 pipx install ose-auditor
 
-# Run an audit
-ose signup          # create a free account
-ose login           # save your API key to ~/.ose/config.json
-ose audit ./your-nodejs-project
+# Authenticate
+ose signup
+ose login
+
+# Run your first audit
+ose audit ./your-project
 ```
 
-### Option 2 – npm global install
+### npm
 
 ```bash
 npm install -g ose-auditor
 
-# Then use the same CLI:
-ose audit ./your-nodejs-project
+ose audit ./your-project
 ```
 
-### Option 3 – npx (zero install, auto-detects pipx or creates a venv)
+### npx
 
 ```bash
-npx ose-auditor audit ./your-nodejs-project
+npx ose-auditor audit ./your-project
 ```
 
-> **Python 3.13 note:** `npx ose-auditor` tries pipx first, falls back to a
-> virtual environment at `~/.ose-venv`, and only uses `pip install --user` as
-> a last resort. If your system blocks `pip --user` (PEP 668), install pipx
-> first and re-run.
+> **Python 3.13:** `npx` automatically attempts to use `pipx` first and falls back to a managed virtual environment when needed.
 
 ---
 
-## Installation summary
+## Installation Summary
 
-| Method | Command | Notes |
-|--------|---------|-------|
-| pipx | `pipx install ose-auditor` | **Preferred** – isolated, no system Python pollution |
-| npm global | `npm install -g ose-auditor` | Good for Node.js-first teams |
-| npx | `npx ose-auditor audit .` | Zero install; auto-installs on first run |
-| pip (advanced) | `pip install ose-auditor` | Use inside a venv |
+| Method | Command |
+|---------|---------|
+| pipx (Recommended) | `pipx install ose-auditor` |
+| npm | `npm install -g ose-auditor` |
+| npx | `npx ose-auditor audit .` |
+| pip (advanced) | `pip install ose-auditor` |
 
 ---
 
 ## Authentication
 
-OSE Auditor uses **per-user API keys** (similar to Snyk). The key is stored in
-`~/.ose/config.json` and loaded automatically on every `ose audit` run.
+Create an account once, then authenticate from the CLI.
 
 ```bash
-# Create a free account
 ose signup
-
-# Log in (saves your key to ~/.ose/config.json)
 ose login
-
-# Confirm you're logged in
 ose whoami
-
-# Log out (removes ~/.ose/config.json)
-ose logout
 ```
 
-For **CI/CD**, skip the login flow and set the key via environment variable:
+For CI/CD environments:
 
 ```bash
 export OSE_API_KEY=ose_sk_your_key_here
+
 ose audit ./project
 ```
 
@@ -94,165 +86,105 @@ ose audit ./project
 
 ## Usage
 
+Run a security audit:
+
 ```bash
-# Audit a project (prints JSON report to stdout)
-ose audit /path/to/your/nodejs/project
+ose audit ./your-project
+```
 
-# Save the report to a file
-ose audit /path/to/your/nodejs/project --output report.json
+Save the report:
 
-# Verbose / debug output
-ose audit /path/to/your/nodejs/project --debug
+```bash
+ose audit ./your-project --output report.json
+```
 
-# Show version
+Enable debug output:
+
+```bash
+ose audit ./your-project --debug
+```
+
+Display the installed version:
+
+```bash
 ose --version
 ```
 
-### Exit codes
+---
 
-| Code | Meaning |
-|------|---------|
-| `0` | Success (including "no findings") |
-| `1` | General error (bad path, auth failure, etc.) |
-| `2` | Audit ran but the server reported a failure |
+## What OSE Auditor Detects
+
+OSE Auditor focuses on business logic and financial security analysis, including:
+
+- Authorization and access-control flaws
+- Double-spend race conditions
+- Settlement and payment workflow issues
+- Unsafe external payment handling
+- Privilege escalation
+- Invalid financial state transitions
+- Missing validation on financial operations
+- Smart contract business logic risks
+- Quantitative trading workflow validation
+
+Each finding includes severity, affected code locations, technical explanation, and remediation guidance.
 
 ---
 
-## What OSE Auditor detects
+## AI Coding Assistant Integration
 
-OSE detects financial and business logic vulnerabilities including:
+OSE Auditor integrates with modern AI coding assistants, including:
 
-| Class | Severity | Description |
-|-------|----------|-------------|
-| `BROKEN_AUTH` | HIGH | Financial state mutated without an authentication/authorization check |
-| `BROKEN_ACCESS_CONTROL` | HIGH | Balance/resource mutated without verifying the caller owns it |
-| `PRIVILEGE_ESCALATION` | HIGH | Authorization decision derived from user-controlled input (`req.body.role`) |
-| `DOUBLE_SPEND` | CRITICAL | Awaited external call suspends execution between a balance read and its update |
-| `UNCHECKED_EXTERNAL_CALL` | HIGH | External payment call result not checked before dependent state mutation |
-| `INVALID_STATE_TRANSITION` | MEDIUM | Order/subscription marked complete without confirming payment succeeded |
-| `SETTLEMENT_BYPASS` | HIGH | Lifecycle state changed without a settlement confirmation check |
-| `MISSING_VALIDATION` | MEDIUM | User-supplied amount or field used in financial mutation without validation |
-| `LOGIC_FLAW` | MEDIUM | Financial state mutated with no auth, no validation, and no guard at all |
-| `SLIPPAGE_OMISSION` | HIGH | Market order placed without a maximum slippage/deviation parameter (Quant) |
+- Claude Code
+- Cursor
+- VS Code
+- Cline
+
+Configure OSE once and allow AI coding assistants to run security audits during development.
+
+Complete setup instructions are available in the documentation.
 
 ---
 
-## MCP server (Claude Code / Cursor / Cline integration)
+## Credits & Billing
 
-OSE Auditor ships an MCP server so AI coding assistants can run security audits
-as a tool call during a coding session.
+| Tier | Credits |
+|------|---------:|
+| Free | 5 complimentary audits every 7 days |
+| Starter | 50 credits |
+| Pro Hacker | 300 credits |
+| Enterprise | Custom plans |
 
-### Claude Code configuration
-
-Add to `.claude/settings.json` (or your workspace MCP config):
-
-```json
-{
-  "mcpServers": {
-    "ose-auditor": {
-      "command": "ose-mcp",
-      "env": {
-        "OSE_API_KEY": "ose_sk_your_key_here"
-      }
-    }
-  }
-}
-```
-
-If `ose-mcp` isn't on PATH yet, use the full path:
-
-```json
-{
-  "mcpServers": {
-    "ose-auditor": {
-      "command": "python3",
-      "args": ["-m", "client.mcp_server"],
-      "env": {
-        "OSE_API_KEY": "ose_sk_your_key_here",
-        "OSE_SERVER_URL": "https://ose.crestsek.com/v1/audit"
-      }
-    }
-  }
-}
-```
-
-### Cursor configuration
-
-Add to `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "ose-auditor": {
-      "command": "ose-mcp",
-      "env": {
-        "OSE_API_KEY": "ose_sk_your_key_here"
-      }
-    }
-  }
-}
-```
-
-### Testing the MCP server manually
-
-```bash
-# Ping
-echo '{"jsonrpc":"2.0","method":"ping","id":1}' | ose-mcp
-
-# List tools
-echo '{"jsonrpc":"2.0","method":"tools/list","id":2}' | ose-mcp
-
-# Run an audit via MCP
-echo '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"ose_audit","arguments":{"project_path":"/path/to/project"}}}' | ose-mcp
-```
-
-### ose-security.json (AI agent auto-trigger)
-
-Commit `ose-security.json` to your project root to instruct AI coding agents
-(Claude Code, Cursor, Cline) to run an OSE audit automatically before
-completing any change that touches financial-logic code. Reference it from
-your `AGENTS.md` or `.cursorrules`:
-
-```markdown
-Before completing any task that touches files matching `**/payment*`,
-`**/wallet*`, `**/balance*`, or similar paths defined in `ose-security.json`,
-run the OSE Auditor MCP tool (`ose_audit`) or `ose audit .` and report any
-CRITICAL or HIGH findings to me before merging.
-```
+Scans that produce **no findings** do **not** consume credits.
 
 ---
 
-## Credits and billing
+## Documentation
 
-| Tier | Credits | Resets |
-|------|---------|--------|
-| Free | 5 credits | Every 7 days |
-| Starter | 50 credits | Never expire |
-| Pro Hacker | 300 credits | Never expire |
-| Enterprise | 1500 credits | Never expire |
+- Getting Started
+- CLI Reference
+- Credits & Billing
+- MCP Integration
+- Security Articles
 
-Purchase credits at [https://ose.crestsek.com](https://ose.crestsek.com).
-
-Audits that produce **no findings** do not consume credits — only manifests
-sent to the server for AI patch generation do.
+[📖](https://blogose.crestsek.com/docs)
 
 ---
 
 ## Requirements
 
-- Python 3.9 or higher
-- Node.js project (JavaScript / TypeScript source files)
+- Python 3.9+
+- Node.js / TypeScript project
 
 ---
 
 ## Links
 
-- **Homepage:** [https://ose.crestsek.com](https://ose.crestsek.com)
-- **Docs:** [https://blogose.crestsek.com/docs](https://blogose.crestsek.com/docs)
-- **GitHub:** [https://github.com/crestseklogistics/ose-auditor](https://github.com/crestseklogistics/ose-auditor)
-- **Issues:** [https://github.com/crestseklogistics/ose-auditor/issues](https://github.com/crestseklogistics/ose-auditor/issues)
-- **npm:** [https://www.npmjs.com/package/ose-auditor](https://www.npmjs.com/package/ose-auditor)
-- **PyPI:** [https://pypi.org/project/ose-auditor](https://pypi.org/project/ose-auditor)
+- **[🌐 Homepage:](https://ose.crestsek.com)**
+- **[📚 Documentation:](https://blogose.crestsek.com/docs)**
+- **[📦 npm:](https://www.npmjs.com/package/ose-auditor)**
+- **[🐍 PyPI:](https://pypi.org/project/ose-auditor)**
+- **[💻 GitHub:](https://github.com/crestseklogistics/ose-auditor)**
+- **[🐞 Issues:](https://github.com/crestseklogistics/ose-auditor/issues)**
 
 ---
 

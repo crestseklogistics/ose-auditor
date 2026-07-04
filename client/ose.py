@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     import orchestrator  # type: ignore
 
 
-__version__ = "1.1.8"
+__version__ = "1.1.9"
 
 # ---------------------------------------------------------------------------
 # Terminal output helpers (coloured, no dependencies)
@@ -342,49 +342,29 @@ def _prompt_credentials() -> tuple[str, str]:
     sys.stderr.write("\033[2m──────────────────────────────\033[0m\n")
     return email, password
 
-
 def _run_buy() -> int:
-    """Interactive credit pack purchase. Prints a Flutterwave URL to stdout.
-
-    Flow:
-      1. Confirm the user is logged in.
-      2. Show available packs in a numbered menu.
-      3. Confirm selection.
-      4. Print the checkout URL — payment is completed in the browser.
-      5. The Node.js webhook on api.crestsek.com credits the account
-         automatically after payment; the user runs ``ose whoami`` to confirm.
-    """
     identity = orchestrator.whoami(verify=False)
     if not identity or not identity.get("user_id"):
         _warn("You must be logged in first.")
         _info("Run: ose login")
         return EXIT_GENERAL_ERROR
 
-    user_id = identity["user_id"]
-
-    # Pack definitions — base URLs are the source of truth in billing.py
-    # (server-side). The CLI fetches the personalised URL from the server
-    # so there is a single definition of pack links in the codebase.
     PACKS = [
-        ("starter",    " $5.00",   50,   "k4vnhabz2rua"),
-        ("pro_hacker", "$25.00",  300,   "0uyg1qynjtnf"),
-        ("enterprise", "$100.00", 1500,  "sidx1mpgltvx"),
+        ("developer",  "$19.00", 50),
+        ("team",       "$99.00", 300),
+        ("enterprise", "Contact Sales", 0),
     ]
 
     sys.stderr.write("\n")
     while True:
         sys.stderr.write("\033[1m  Credit packs\033[0m\n")
-        sys.stderr.write(
-            "\033[2m  ─────────────────────────────────────────\033[0m\n")
-        for i, (name, price, credits, _) in enumerate(PACKS, 1):
+        sys.stderr.write("\033[2m  ─────────────────────────────────────────\033[0m\n")
+        for i, (name, price, credits) in enumerate(PACKS, 1):
             label = name.replace("_", " ").title()
-            sys.stderr.write(
-                f"  \033[36m[{i}]\033[0m {label:<15} \033[33m{price}\033[0m"
-                f"   {credits:>4} credits\n"
-            )
+            credits_str = f"{credits:>4} credits" if credits else "  custom"
+            sys.stderr.write(f"  \033[36m[{i}]\033[0m {label:<15} \033[33m{price}\033[0m   {credits_str}\n")
         sys.stderr.write("  \033[2m[4] Cancel\033[0m\n")
-        sys.stderr.write(
-            "\033[2m  ─────────────────────────────────────────\033[0m\n\n")
+        sys.stderr.write("\033[2m  ─────────────────────────────────────────\033[0m\n\n")
 
         choice = input("  Select (1-4): ").strip()
         if choice in ("4", "q", "cancel", ""):
@@ -395,28 +375,42 @@ def _run_buy() -> int:
             sys.stderr.write("\n")
             continue
 
-        idx = int(choice) - 1
-        pack_name, price, credits, slug = PACKS[idx]
+        pack_name, price, credits = PACKS[int(choice) - 1]
         label = pack_name.replace("_", " ").title()
+        sys.stderr.write(f"\n  You selected: \033[1m{label}\033[0m\n\n")
 
-        sys.stderr.write(
-            f"\n  You selected: \033[1m{label}\033[0m — "
-            f"{credits} credits for \033[33m{price}\033[0m\n\n"
-        )
+        try:
+            resp = orchestrator.get_checkout(pack_name)
+        except orchestrator.ServerCommunicationError as exc:
+            _err(str(exc))
+            sys.stderr.write("\n")
+            continue
+
+        if resp.get("contact_sales"):
+            sys.stderr.write("\n  \033[1mEnterprise Tier – Contact Sales\033[0m\n\n")
+            sys.stderr.write(
+                "  OSE Auditor Enterprise is tailored to your organization's needs.\n"
+                "    • Custom pricing based on your usage\n"
+                "    • Dedicated support and SLAs\n"
+                "    • On-premise or private cloud deployment\n"
+                "    • Compliance and security reviews\n\n"
+                "  \033[36mhttps://ose.crestsek.com/contact\033[0m\n"
+                "  \033[36msales@crestsek.com\033[0m\n\n"
+            )
+            return EXIT_SUCCESS
+
         confirm = input("  Proceed to checkout? (y/n): ").strip().lower()
         if confirm != "y":
             sys.stderr.write("\n")
             continue
 
-        url = f"https://flutterwave.com/pay/{slug}?user_id={user_id}"
-        sys.stderr.write("\n")
-        sys.stderr.write("  \033[1mPay here:\033[0m\n\n")
-        sys.stderr.write(f"    \033[36m{url}\033[0m\n\n")
+        sys.stderr.write("\n  \033[1mPay here:\033[0m\n\n")
+        sys.stderr.write(f"    \033[36m{resp['url']}\033[0m\n\n")
         _info("After payment your credits update automatically.")
         _info("Run \033[1mose whoami\033[0m to confirm your new balance.")
         sys.stderr.write("\n")
         return EXIT_SUCCESS
-
+    
 # ---------------------------------------------------------------------------
 # MCP setup helpers
 # ---------------------------------------------------------------------------
@@ -588,7 +582,6 @@ def _run_mcp_setup() -> int:
         sys.stderr.write("\n")
 
     return EXIT_GENERAL_ERROR if any_error else EXIT_SUCCESS
-
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Parse CLI arguments and execute the requested OSE Auditor command.
