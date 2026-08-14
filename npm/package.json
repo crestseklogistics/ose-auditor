@@ -1,0 +1,36 @@
+{
+  "name": "ose-auditor",
+  "version": "1.0.13",
+  "description": "Run OSE Auditor (financial-logic security scanner for Node.js/TypeScript) without installing Python yourself -- this wrapper finds a Python 3 interpreter, installs the ose-auditor PyPI package on first run if needed, and forwards all arguments to it.",
+  "license": "MIT",
+  "bin": {
+    "ose-audit": "ose.js",
+    "ose": "ose.js"
+  },
+  "files": [
+    "ose.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "test": "node ose.js --version"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "sast",
+    "vulnerability-scanner",
+    "nodejs",
+    "typescript",
+    "fintech"
+  ],
+  "homepage": "https://ose.crestsek.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crestseklogistics/ose-auditor"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
