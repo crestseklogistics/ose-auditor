@@ -1,0 +1,54 @@
+name: OSE Auditor CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  test-cli:
+    name: Test OSE Auditor CLI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Install npm dependencies (for wrapper)
+        run: |
+          cd npm
+          npm ci
+
+      - name: Run Python tests
+        run: |
+          pytest tests/ -v --tb=short
+        env:
+          OSE_API_KEY: ${{ secrets.OSE_API_KEY }}
+
+      - name: Run npm wrapper smoke test
+        run: |
+          cd npm
+          node ose.js --version
+
+      - name: Run Semgrep security scan
+        run: |
+          pip install semgrep
+          semgrep --config=client/cyber_rules/ --json --quiet . || true
